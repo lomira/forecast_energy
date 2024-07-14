@@ -1,0 +1,128 @@
+library(testthat)
+library(dplyr)
+library(lubridate)
+
+# Helper function to create sample data
+source("../../src/import.R")
+
+create_sample_data <- function(start_date, n_hours) {
+  tibble(
+    timestamp = seq(start_date, by = "hour", length.out = n_hours),
+    value = runif(n_hours, 0, 100)
+  )
+}
+sample_start <- sample(seq(ymd_h("1900/01/01 0"), ymd_h("2024/01/01 23"), by="hour"), 1)
+n_row <- sample(100:1000,1)
+sample_data <- create_sample_data(sample_start, n_row)
+
+# Tests for aggregate_time_series function
+test_that("aggregate_time_series works correctly", {
+  daily_max <- aggregate_time_series(sample_data, timestamp, value, max, "day", "daily_max")
+  expect_equal(nrow(daily_max), n_distinct(date(sample_data$timestamp)))
+
+  manual_daily_max <- sample_data %>%
+    mutate(date = date(timestamp)) %>%
+    group_by(date) %>%
+    summarise(max_value = max(value, na.rm = TRUE))
+  expect_equal(daily_max$daily_max, manual_daily_max$max_value)
+  expect_equal(names(daily_max), c("date", "daily_max"))
+  
+  # Test monthly aggregation
+  monthly_mean <- aggregate_time_series(sample_data, timestamp, value, mean, "month", "monthly_avg")
+  expect_equal(nrow(monthly_mean), n_distinct(floor_date(sample_data$timestamp, "month")))
+  manual_monthly_mean <- sample_data %>%
+    mutate(month = floor_date(timestamp, "month")) %>%
+    group_by(month) %>%
+    summarise(mean_value = mean(value, na.rm = TRUE))
+  expect_equal(monthly_mean$monthly_avg, manual_monthly_mean$mean_value)
+
+  expect_equal(names(monthly_mean), c("date", "monthly_avg"))
+  
+  # Test yearly aggregation
+  yearly_sum <- aggregate_time_series(sample_data, timestamp, value, sum, "year", "yearly_total")
+  expect_equal(nrow(yearly_sum), n_distinct(floor_date(sample_data$timestamp, "year")))
+  manual_yearly_sum <- sample_data %>%
+    mutate(year = floor_date(timestamp, "year")) %>%
+    group_by(year) %>%
+    summarise(sum_value = sum(value, na.rm = TRUE))
+  
+  expect_equal(yearly_sum$yearly_total, manual_yearly_sum$sum_value)
+  expect_equal(names(yearly_sum), c("date", "yearly_total"))
+})
+
+test_that("aggregate_time_series handles edge cases", {
+  # Empty dataset
+  empty_data <- tibble(timestamp = lubridate::ymd_hms(), value = numeric())
+  expect_error(aggregate_time_series(empty_data, timestamp, value, max), ".data must have data")
+  
+  # Single row dataset
+  single_row <- tibble(timestamp = ymd_h("2023-01-01 00"), value = 50)
+  single_result <- aggregate_time_series(single_row, timestamp, value, max)
+  expect_equal(nrow(single_result), 1)
+  
+  # Dataset with NA values
+  # TODO To think about
+})
+
+test_that("aggregate_time_series handles incorrect inputs", {  
+  # Incorrect data type
+  expect_error(aggregate_time_series(as.matrix(sample_data), timestamp, value, max))
+  
+  # Non-existent columns
+  expect_error(aggregate_time_series(sample_data, non_existent, value, max))
+  expect_error(aggregate_time_series(sample_data, timestamp, non_existent, max))
+  
+  # Incorrect time unit
+  expect_error(aggregate_time_series(sample_data, timestamp, value, max, "week"))
+  
+  # Incorrect output column name
+  expect_error(aggregate_time_series(sample_data, timestamp, value, max, output_col = c("col1", "col2")))
+})
+
+test_that("aggregate_time_series works with different reduction functions", {
+  
+  custom_fn <- function(x) sum(x) / length(x)  # A custom mean function
+  custom_result <- aggregate_time_series(sample_data, timestamp, value, custom_fn, "day", "custom_avg")
+  expect_equal(nrow(custom_result), n_distinct(date(sample_data$timestamp)))
+  manual_custom_avg <- sample_data %>%
+    mutate(date = date(timestamp)) %>%
+    group_by(date) %>%
+    summarise(custom_avg = custom_fn(value))
+  expect_equal(custom_result$custom_avg, manual_custom_avg$custom_avg, tolerance = 1e-3)
+  
+  # Test with median
+  median_result <- aggregate_time_series(sample_data, timestamp, value, median, "month", "monthly_median")
+  manual_monthly_median <- sample_data %>%
+    mutate(month = floor_date(timestamp, "month")) %>%
+    group_by(month) %>%
+    summarise(median_value = median(value, na.rm = TRUE))
+
+  expect_equal(nrow(median_result), n_distinct(floor_date(sample_data$timestamp, "month")))
+  expect_equal(median_result$monthly_median, manual_monthly_median$median_value)
+})
+
+test_that("aggregate_time_series preserves timezone information", {
+  # Create data with timezone
+  tz_data <- tibble(
+    timestamp = seq(ymd_h("2023-06-01 00", tz = "America/New_York"), by = "hour", length.out = 100),
+    timestamp2 = seq(ymd_h("2023-06-01 00", tz = "Africa/Casablanca"), by = "hour", length.out = 100),
+    value = runif(100, 0, 100)
+  )
+  
+  tz_result <- aggregate_time_series(tz_data, timestamp, value, max, "day")
+  expect_equal(tz(tz_result$date), "America/New_York")
+
+  tz_result <- aggregate_time_series(tz_data, timestamp2, value, mean, "month")
+  expect_equal(tz(tz_result$date), "Africa/Casablanca")
+})
+
+test_that("aggregate_time_series handles daylight saving time correctly", {
+  # Create data spanning a DST transition
+  dst_data <- tibble(
+    timestamp = seq(ymd_h("2024-03-30 12", tz = "Europe/Paris"), by = "hour", length.out = 50),
+    value = runif(50, 0, 100)
+  )
+  
+  dst_result <- aggregate_time_series(dst_data, timestamp, value, max, "day")
+  expect_equal(nrow(dst_result), n_distinct(date(dst_data$timestamp)))
+})
