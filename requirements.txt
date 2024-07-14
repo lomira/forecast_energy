@@ -10,5 +10,8 @@ numpy==1.26.3
 pillow==10.2.0
 sympy==1.12
 tbb==2021.11.0
-torch==2.3.1+cu121
 typing_extensions==4.9.0
+
+# Torch with cuda Support
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.3.1+cu121
